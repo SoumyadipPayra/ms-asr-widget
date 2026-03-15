@@ -13,6 +13,13 @@ dependencies = [
     "tomli>=2.0.0;python_version<'3.12'",
 ]
 
+[project.optional-dependencies]
+mac = [
+    "pyobjc-framework-Cocoa>=10.0",
+    "pyobjc-framework-Quartz>=10.0",
+    "py2app>=0.28",
+]
+
 [project.scripts]
 asr-widget = "asr_widget.main:main"
 

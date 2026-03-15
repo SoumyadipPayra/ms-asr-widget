@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import platform
 import queue
 import sys
 import threading
-import tkinter as tk
-from typing import Callable
 
 from asr_widget.activation.click import ClickActivation
 from asr_widget.activation.hotkey import HotkeyActivation
 from asr_widget.asr.client import ASRClient
 from asr_widget.audio.capture import MicCapture
 from asr_widget.config import AppConfig, load_config
-from asr_widget.output.keystroke import KeystrokeInjector
-from asr_widget.ui.statusbar import StatusBarItem
-from asr_widget.ui.widget import FloatingWidget
+from asr_widget.output import KeystrokeInjector
+from asr_widget.ui import FloatingWidget, StatusBarItem
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,7 +26,7 @@ class App:
     """Main application orchestrator.
 
     Threading model:
-      - Main thread: tkinter event loop (required for UI)
+      - Main thread: UI event loop (NSApplication on macOS, tkinter on Linux)
       - Background thread: asyncio event loop (WebSocket + audio pump)
       - PortAudio thread: microphone callback (managed by sounddevice)
     """
@@ -73,21 +71,16 @@ class App:
 
     def run(self) -> None:
         """Start the application."""
-        # Start the asyncio event loop on a background thread
+        # Asyncio event loop on a background thread
         self._loop = asyncio.new_event_loop()
         self._loop_thread = threading.Thread(
             target=self._run_async_loop, daemon=True, name="async-loop"
         )
         self._loop_thread.start()
 
-        # Start activation sources
+        # Activation sources
         self._click_activation.start()
         self._hotkey_activation.start()
-
-        # Create tkinter root and UI
-        root = tk.Tk()
-        self._widget.create(root)
-        self._statusbar.create()
 
         logger.info(
             "ASR Widget running — hotkey: %s, gateway: %s",
@@ -95,7 +88,35 @@ class App:
             self._config.gateway.url,
         )
 
-        # Run the tkinter event loop (blocks until window closed)
+        if platform.system() == "Darwin":
+            self._run_macos()
+        else:
+            self._run_tkinter()
+
+    def _run_macos(self) -> None:
+        """macOS: NSApplication + NSPanel."""
+        from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+        app = NSApplication.sharedApplication()
+        app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+
+        self._widget.create()
+        self._statusbar.create()
+
+        from PyObjCTools import AppHelper
+        try:
+            AppHelper.runEventLoop()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self._shutdown()
+
+    def _run_tkinter(self) -> None:
+        """Linux / fallback: tkinter."""
+        import tkinter as tk
+        root = tk.Tk()
+        self._widget.create(root)
+        self._statusbar.create()
+
         try:
             root.mainloop()
         except KeyboardInterrupt:
@@ -112,14 +133,12 @@ class App:
         logger.info("Shut down")
 
     def _run_async_loop(self) -> None:
-        """Run the asyncio event loop on a background thread."""
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
-    # -- Activation callbacks (called from any thread) --
+    # -- Activation callbacks --
 
     def _on_activate(self) -> None:
-        """Start recording and streaming."""
         if self._active:
             return
         self._active = True
@@ -133,7 +152,6 @@ class App:
         asyncio.run_coroutine_threadsafe(self._start_streaming(), self._loop)
 
     def _on_deactivate(self) -> None:
-        """Stop recording and streaming."""
         if not self._active:
             return
         self._active = False
@@ -174,7 +192,6 @@ class App:
         await self._asr_client.stop_session()
 
     async def _audio_pump(self) -> None:
-        """Read audio chunks from the mic queue and send to ASR."""
         mic_queue = self._mic.chunk_queue
         while True:
             chunk = await self._loop.run_in_executor(
