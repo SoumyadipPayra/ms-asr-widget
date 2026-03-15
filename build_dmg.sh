@@ -2,9 +2,9 @@
 # Build ASR Widget.app and package it into a DMG.
 #
 # Usage:  ./build_dmg.sh
-# Requires: macOS, Python 3.11+, uv (or pip)
+# Requires: macOS, Python 3.9+
 #
-# Produces: dist/ASRWidget.dmg
+# Produces: dist/ASRWidget-<VERSION>.dmg
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,43 +18,62 @@ echo "=== ASR Widget Build ==="
 echo "Version: $VERSION"
 echo ""
 
-# --- 1. Set up venv -------------------------------------------------------
+# --- 1. Set up venv -----------------------------------------------------------
 echo "--- Setting up build environment ---"
+
+# Wipe any stale build venv to ensure a clean state
+rm -rf .venv-build
+
 if command -v uv &>/dev/null; then
-    uv venv .venv-build 2>/dev/null || true
+    uv venv .venv-build
     source .venv-build/bin/activate
-    uv pip install -e ".[mac]" py2app 2>/dev/null || \
+    uv pip install --upgrade pip
     uv pip install \
-        pyobjc-framework-Cocoa \
-        pyobjc-framework-Quartz \
-        websockets \
-        sounddevice \
-        pynput \
-        py2app
+        "pyobjc-framework-Cocoa>=10.0" \
+        "pyobjc-framework-Quartz>=10.0" \
+        "pyobjc-framework-ApplicationServices>=10.0" \
+        "websockets>=12.0" \
+        "sounddevice>=0.4.6" \
+        "numpy>=1.24.0" \
+        "pynput>=1.7.6" \
+        "tomli>=2.0.0" \
+        "pillow>=9.0" \
+        "py2app>=0.28"
+    uv pip install -e .
 else
-    python3 -m venv .venv-build 2>/dev/null || true
+    python3 -m venv .venv-build
     source .venv-build/bin/activate
+    pip install --upgrade pip
     pip install \
-        pyobjc-framework-Cocoa \
-        pyobjc-framework-Quartz \
-        websockets \
-        sounddevice \
-        pynput \
-        py2app
+        "pyobjc-framework-Cocoa>=10.0" \
+        "pyobjc-framework-Quartz>=10.0" \
+        "pyobjc-framework-ApplicationServices>=10.0" \
+        "websockets>=12.0" \
+        "sounddevice>=0.4.6" \
+        "numpy>=1.24.0" \
+        "pynput>=1.7.6" \
+        "tomli>=2.0.0" \
+        "pillow>=9.0" \
+        "py2app>=0.28"
+    pip install -e .
 fi
 
-# --- 2. Generate icon ------------------------------------------------------
+# --- 2. Generate icon ---------------------------------------------------------
 echo ""
 echo "--- Generating app icon ---"
 python assets/generate_icon.py
 if command -v iconutil &>/dev/null; then
     bash assets/png_to_icns.sh
 else
-    echo "WARNING: iconutil not found (not on macOS?). Using placeholder icon."
-    # py2app will work without an icon, just won't look as nice
+    echo "WARNING: iconutil not found — skipping ICNS generation."
 fi
 
-# --- 3. Build .app ---------------------------------------------------------
+# --- 3. Clean previous build output -------------------------------------------
+echo ""
+echo "--- Cleaning previous build ---"
+rm -rf build dist
+
+# --- 4. Build .app ------------------------------------------------------------
 echo ""
 echo "--- Building ${APP_NAME}.app ---"
 python setup_mac.py py2app --dist-dir dist
@@ -66,10 +85,21 @@ fi
 
 echo "Built: dist/${APP_NAME}.app"
 
-# --- 4. Copy config into app bundle ----------------------------------------
+# --- 5. Embed bundled config --------------------------------------------------
 cp config.toml "dist/${APP_NAME}.app/Contents/Resources/"
 
-# --- 5. Create DMG ---------------------------------------------------------
+# --- 5b. Fix sounddevice portaudio path ----------------------------------------
+# sounddevice.pyc inside python39.zip resolves _sounddevice_data relative to the
+# zip path, which fails.  Remove it from the zip so Python falls through to the
+# uncompressed copy in lib/python3.9/ where _sounddevice_data is a sibling dir.
+ZIP="dist/${APP_NAME}.app/Contents/Resources/lib/python39.zip"
+if [ -f "$ZIP" ]; then
+    echo "--- Fixing sounddevice in zip ---"
+    zip -d "$ZIP" "sounddevice.pyc" 2>/dev/null || true
+    echo "Removed sounddevice.pyc from zip"
+fi
+
+# --- 6. Create DMG ------------------------------------------------------------
 echo ""
 echo "--- Creating DMG ---"
 
@@ -80,11 +110,8 @@ rm -rf "$DMG_DIR" "$DMG_PATH"
 mkdir -p "$DMG_DIR"
 
 cp -R "dist/${APP_NAME}.app" "$DMG_DIR/"
-
-# Create a symlink to /Applications for drag-to-install
 ln -s /Applications "$DMG_DIR/Applications"
 
-# Create DMG
 hdiutil create \
     -volname "$APP_NAME" \
     -srcfolder "$DMG_DIR" \
@@ -99,8 +126,12 @@ echo "=== Build complete ==="
 echo "  App: dist/${APP_NAME}.app"
 echo "  DMG: ${DMG_PATH}"
 echo ""
-echo "To install: open the DMG and drag '$APP_NAME' to Applications."
+echo "To install:"
+echo "  1. Open ${DMG_PATH}"
+echo "  2. Drag '${APP_NAME}' to Applications"
+echo "  3. Launch — a setup dialog will ask for your gateway URL on first run"
 echo ""
-echo "First run permissions needed:"
-echo "  1. Microphone: System Settings > Privacy & Security > Microphone"
-echo "  2. Accessibility: System Settings > Privacy & Security > Accessibility"
+echo "Permissions required on first launch:"
+echo "  • Microphone:    System Settings > Privacy & Security > Microphone"
+echo "  • Automation:    System Settings > Privacy & Security > Automation  (for text injection)"
+echo "  • Accessibility: System Settings > Privacy & Security > Accessibility (for hotkey)"

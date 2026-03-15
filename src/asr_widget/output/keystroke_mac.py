@@ -1,23 +1,27 @@
 from __future__ import annotations
 
 import logging
-import time
-
-import Quartz
+import subprocess
+import threading
 
 logger = logging.getLogger(__name__)
 
+# AppleScript that pastes from the clipboard into the currently focused app.
+_PBPASTE   = "/usr/bin/pbpaste"
+_PBCOPY    = "/usr/bin/pbcopy"
+_OSASCRIPT = "/usr/bin/osascript"
+_PASTE_SCRIPT = 'tell application "System Events" to keystroke "v" using {command down}'
+
 
 class KeystrokeInjector:
-    """Injects text at the current cursor position using macOS CGEvent API.
+    """Injects text at the current cursor position on macOS.
 
-    Types into whatever application currently has keyboard focus.
-    Requires Accessibility permission in System Preferences >
-    Privacy & Security > Accessibility.
+    Uses a clipboard-swap strategy (pbcopy → Cmd+V via osascript) so it works
+    without the app needing Accessibility permission.  The original clipboard
+    content is restored asynchronously after a short delay.
     """
 
-    def __init__(self, inter_char_delay: float = 0.001) -> None:
-        self._inter_char_delay = inter_char_delay
+    def __init__(self) -> None:
         self._needs_space = False
 
     def type_text(self, text: str) -> None:
@@ -27,23 +31,50 @@ class KeystrokeInjector:
         if self._needs_space:
             text = " " + text
 
-        logger.debug("Typing %d characters", len(text))
+        logger.warning("INJECTING text via clipboard: %r", text)
 
-        for char in text:
-            self._type_char(char)
-            if self._inter_char_delay > 0:
-                time.sleep(self._inter_char_delay)
+        # Save current clipboard so we can restore it.
+        try:
+            old = subprocess.run(
+                [_PBPASTE], capture_output=True, timeout=2
+            ).stdout  # bytes
+        except Exception:
+            old = b""
+
+        # Place the transcript on the clipboard (pass as UTF-8 bytes).
+        try:
+            subprocess.run(
+                [_PBCOPY], input=text.encode("utf-8"), timeout=2, check=True
+            )
+        except Exception:
+            logger.error("pbcopy failed — transcript not injected", exc_info=True)
+            return
+
+        # Paste into the focused window via System Events.
+        try:
+            result = subprocess.run(
+                [_OSASCRIPT, "-e", _PASTE_SCRIPT],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode != 0:
+                logger.error("osascript paste failed (rc=%d): %s", result.returncode, result.stderr.strip())
+            else:
+                logger.warning("osascript paste OK")
+        except Exception:
+            logger.error("osascript paste exception", exc_info=True)
 
         self._needs_space = True
 
+        # Restore the original clipboard after giving the paste time to land.
+        def _restore() -> None:
+            import time
+            time.sleep(0.6)
+            try:
+                subprocess.run([_PBCOPY], input=old, timeout=2)
+            except Exception:
+                pass
+
+        threading.Thread(target=_restore, daemon=True).start()
+
     def reset(self) -> None:
         self._needs_space = False
-
-    @staticmethod
-    def _type_char(char: str) -> None:
-        event_down = Quartz.CGEventCreateKeyboardEvent(None, 0, True)
-        event_up = Quartz.CGEventCreateKeyboardEvent(None, 0, False)
-        Quartz.CGEventKeyboardSetUnicodeString(event_down, 1, char)
-        Quartz.CGEventKeyboardSetUnicodeString(event_up, 1, char)
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event_down)
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event_up)

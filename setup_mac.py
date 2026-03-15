@@ -13,6 +13,7 @@ DATA_FILES = [("", ["config.toml"])]
 
 OPTIONS = {
     "argv_emulation": False,
+    "compressed": False,
     "iconfile": "assets/icon.icns",
     "plist": {
         "CFBundleName": "ASR Widget",
@@ -35,12 +36,17 @@ OPTIONS = {
         "websockets",
         "pynput",
         "sounddevice",
+        "_sounddevice_data",
+        "numpy",
+        "tomli",
+        "PIL",
     ],
     "includes": [
         "objc",
         "AppKit",
         "Quartz",
         "Foundation",
+        "ApplicationServices",
         "PyObjCTools",
         "PyObjCTools.AppHelper",
     ],

@@ -11,5 +11,5 @@ combination = "<cmd>+<shift>+<space>"
 mode = "toggle"  # "toggle" or "push_to_talk"
 
 [ui]
-size = 44
+size = 58
 opacity = 0.9

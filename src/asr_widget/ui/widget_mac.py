@@ -10,13 +10,8 @@ from AppKit import (
     NSBackingStoreBuffered,
     NSBezierPath,
     NSColor,
-    NSFont,
-    NSFontAttributeName,
-    NSForegroundColorAttributeName,
     NSMakeRect,
     NSPanel,
-    NSParagraphStyleAttributeName,
-    NSParagraphStyle,
     NSScreen,
     NSView,
     NSWindowCollectionBehaviorCanJoinAllSpaces,
@@ -33,6 +28,52 @@ logger = logging.getLogger(__name__)
 
 def _nscolor(r, g, b, a=1.0):
     return NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, a)
+
+def _draw_mic(w, h):
+    """Draw a clean vector microphone glyph centred in a w×h area."""
+    cx, cy = w / 2, h / 2
+    lw = max(1.5, w * 0.038)
+
+    # Mic capsule — tall rounded rectangle, shifted slightly up
+    bw = w * 0.24
+    bh = h * 0.34
+    by = cy - h * 0.04
+    capsule = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+        NSMakeRect(cx - bw / 2, by, bw, bh), bw / 2, bw / 2
+    )
+    _nscolor(1, 1, 1, 0.92).setFill()
+    capsule.fill()
+
+    # Arc (open-top ∩ shape, drawn below capsule centre)
+    arc_r = w * 0.22
+    arc_cy = by + bh * 0.45
+    arc = NSBezierPath.bezierPath()
+    arc.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise_(
+        (cx, arc_cy), arc_r, 0.0, 180.0, False
+    )
+    arc.setLineWidth_(lw)
+    _nscolor(1, 1, 1, 0.88).setStroke()
+    arc.stroke()
+
+    # Stem
+    stem_top = arc_cy - arc_r
+    stem_bot = stem_top - h * 0.09
+    stem = NSBezierPath.bezierPath()
+    stem.moveToPoint_((cx, stem_top))
+    stem.lineToPoint_((cx, stem_bot))
+    stem.setLineWidth_(lw)
+    stem.stroke()
+
+    # Base bar
+    base_w = w * 0.32
+    base_h = lw
+    base = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+        NSMakeRect(cx - base_w / 2, stem_bot - base_h, base_w, base_h),
+        base_h / 2, base_h / 2
+    )
+    _nscolor(1, 1, 1, 0.88).setFill()
+    base.fill()
+
 
 STATE_FILL = {
     "idle":       (0.22, 0.22, 0.25),
@@ -138,52 +179,49 @@ class CircleView(NSView):
         return False
 
     def drawRect_(self, rect):
+        try:
+            self._drawContent()
+        except Exception:
+            logger.exception("drawRect_ error")
+
+    def _drawContent(self):
         r, g, b = STATE_FILL.get(self._state, STATE_FILL["idle"])
+        w = self.bounds().size.width
+        h = self.bounds().size.height
+        corner = w * 0.28   # squircle corner radius
 
-        # Shadow
-        shadow_color = _nscolor(0, 0, 0, 0.35)
-        shadow_color.setFill()
-        shadow_rect = NSMakeRect(1, 0, self.bounds().size.width - 2, self.bounds().size.height - 2)
-        NSBezierPath.bezierPathWithOvalInRect_(shadow_rect).fill()
+        # Shadow (slightly offset down)
+        shadow_rect = NSMakeRect(2, 0, w - 4, h - 3)
+        shadow_path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            shadow_rect, corner, corner
+        )
+        _nscolor(0, 0, 0, 0.30).setFill()
+        shadow_path.fill()
 
-        # Main circle
+        # Main rounded rect
         inset = 2
-        circle_rect = NSMakeRect(
-            inset, inset,
-            self.bounds().size.width - inset * 2,
-            self.bounds().size.height - inset * 2,
+        bg_rect = NSMakeRect(inset, inset, w - inset * 2, h - inset * 2)
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            bg_rect, corner - inset * 0.5, corner - inset * 0.5
         )
         _nscolor(r, g, b, 0.95).setFill()
-        path = NSBezierPath.bezierPathWithOvalInRect_(circle_rect)
         path.fill()
 
-        # Subtle highlight on upper half
-        highlight_rect = NSMakeRect(
-            inset + 4, self.bounds().size.height / 2,
-            self.bounds().size.width - inset * 2 - 8,
-            self.bounds().size.height / 2 - inset - 2,
+        # Glassy top highlight
+        hi_rect = NSMakeRect(inset + 4, h * 0.52, w - inset * 2 - 8, h * 0.36)
+        hi_path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            hi_rect, (corner - inset * 0.5) * 0.7, (corner - inset * 0.5) * 0.7
         )
-        _nscolor(1, 1, 1, 0.12).setFill()
-        NSBezierPath.bezierPathWithOvalInRect_(highlight_rect).fill()
+        _nscolor(1, 1, 1, 0.13).setFill()
+        hi_path.fill()
 
         # Border
-        _nscolor(1, 1, 1, 0.15).setStroke()
+        _nscolor(1, 1, 1, 0.18).setStroke()
         path.setLineWidth_(1.0)
         path.stroke()
 
-        # Mic icon (using SF Symbols text fallback)
-        icon = "\U0001F399" if self._state != "listening" else "\U0001F534"
-        font_size = self.bounds().size.width * 0.36
-        attrs = {
-            NSFontAttributeName: NSFont.systemFontOfSize_(font_size),
-            NSForegroundColorAttributeName: _nscolor(1, 1, 1, 0.9),
-        }
-        from Foundation import NSString
-        ns_str = NSString.alloc().initWithString_(icon)
-        size = ns_str.sizeWithAttributes_(attrs)
-        x = (self.bounds().size.width - size.width) / 2
-        y = (self.bounds().size.height - size.height) / 2
-        ns_str.drawAtPoint_withAttributes_((x, y), attrs)
+        # Mic glyph
+        _draw_mic(w, h)
 
     def setState_(self, state):
         self._state = state

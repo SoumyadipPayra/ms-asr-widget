@@ -43,7 +43,7 @@ class HotkeyConfig:
 
 @dataclass
 class UIConfig:
-    size: int = 44
+    size: int = 58
     opacity: float = 0.9
 
 
@@ -81,9 +81,9 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         _xdg = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
         candidates.append(_xdg / "asr-widget" / "config.toml")
 
+    candidates.append(Path.home() / ".config" / "asr-widget" / "config.toml")
     candidates.append(Path.cwd() / "config.toml")
     candidates.append(Path(__file__).resolve().parent.parent.parent / "config.toml")
-    candidates.append(Path.home() / ".config" / "asr-widget" / "config.toml")
 
     data: dict = {}
     for candidate in candidates:
@@ -117,7 +117,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             mode=hk.get("mode", "toggle"),
         ),
         ui=UIConfig(
-            size=ui.get("size", 44),
+            size=ui.get("size", 58),
             opacity=ui.get("opacity", 0.9),
         ),
     )

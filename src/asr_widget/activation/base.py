@@ -59,3 +59,7 @@ class ActivationSource(ABC):
             self.deactivate()
         else:
             self.activate()
+
+    def reset(self) -> None:
+        """Force state back to INACTIVE without firing callbacks."""
+        self._state = ActivationState.INACTIVE

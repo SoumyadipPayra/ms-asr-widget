@@ -53,7 +53,7 @@ class App:
             opacity=config.ui.opacity,
             on_click=self._on_widget_click,
         )
-        self._statusbar = StatusBarItem()
+        self._statusbar = StatusBarItem(on_preferences=self._show_preferences)
 
         # Activation sources
         self._click_activation = ClickActivation(
@@ -99,16 +99,60 @@ class App:
         app = NSApplication.sharedApplication()
         app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
+        self._request_accessibility_permission()
         self._widget.create()
         self._statusbar.create()
 
         from PyObjCTools import AppHelper
+        AppHelper.callLater(0.1, self._maybe_first_run_setup)
         try:
             AppHelper.runEventLoop()
         except KeyboardInterrupt:
             pass
         finally:
             self._shutdown()
+
+    def _maybe_first_run_setup(self) -> None:
+        """Show first-run setup dialog if no user config exists yet."""
+        from asr_widget.ui.setup_dialog_mac import is_first_run, show_setup_dialog, save_user_config
+        if not is_first_run():
+            return
+        url = show_setup_dialog(default_url=self._config.gateway.url)
+        if url:
+            save_user_config(url)
+            self._config.gateway.url = url
+            self._asr_client._url = url
+            logger.info("Gateway URL set to: %s", url)
+
+    def _show_preferences(self) -> None:
+        """Show the gateway URL dialog, allowing reconfiguration at any time."""
+        from asr_widget.ui.setup_dialog_mac import show_setup_dialog, save_user_config
+        url = show_setup_dialog(default_url=self._config.gateway.url)
+        if url:
+            save_user_config(url)
+            self._config.gateway.url = url
+            self._asr_client._url = url
+            logger.info("Gateway URL updated to: %s", url)
+
+    @staticmethod
+    def _request_accessibility_permission() -> None:
+        """Prompt the user for Accessibility permission if not already granted.
+
+        This call registers the app in System Settings > Privacy & Security >
+        Accessibility and shows a one-time system dialog on first launch.
+        """
+        try:
+            from ApplicationServices import (
+                AXIsProcessTrustedWithOptions,
+                kAXTrustedCheckOptionPrompt,
+            )
+            trusted = AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
+            if trusted:
+                logger.info("Accessibility permission already granted")
+            else:
+                logger.info("Accessibility permission requested — awaiting user approval")
+        except Exception:
+            logger.warning("Could not request accessibility permission", exc_info=True)
 
     def _run_tkinter(self) -> None:
         """Linux / fallback: tkinter."""
@@ -176,6 +220,9 @@ class App:
             self._statusbar.set_state("error")
             self._active = False
             self._mic.stop()
+            # Resync activation sources so the next tap works correctly
+            self._click_activation.reset()
+            self._hotkey_activation.reset()
             return
 
         self._audio_pump_task = asyncio.create_task(self._audio_pump())

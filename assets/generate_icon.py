@@ -1,126 +1,178 @@
 #!/usr/bin/env python3
 """Generate the app icon as a PNG (convert to ICNS on macOS with iconutil).
 
-Creates a dark circle with a microphone glyph — matches the widget look.
+Requires Pillow: pip install pillow
 
 Usage:
     python assets/generate_icon.py          # creates assets/icon.png
     # Then on macOS, run: assets/png_to_icns.sh
 """
 
-import struct
-import zlib
+import math
 import os
+
+try:
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+    HAS_PILLOW = True
+except ImportError:
+    HAS_PILLOW = False
 
 
 def create_icon_png(size: int = 512) -> bytes:
-    """Generate a simple icon PNG programmatically (no PIL needed)."""
-    # We draw a filled circle on a transparent background
-    pixels = []
+    if HAS_PILLOW:
+        return _create_pillow(size)
+    return _create_fallback(size)
+
+
+def _create_pillow(size: int) -> bytes:
+    """High-quality icon: deep navy circle, glassy mic, soft glow ring."""
+    import io
+
+    # --- Background ---
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+
+    # Outer soft glow (very subtle)
+    glow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    pad = size * 0.02
+    gd.ellipse([pad, pad, size - pad, size - pad], fill=(100, 140, 255, 40))
+    glow = glow.filter(ImageFilter.GaussianBlur(size * 0.04))
+    img = Image.alpha_composite(img, glow)
+
+    draw = ImageDraw.Draw(img)
+
+    # --- Main circle: deep navy / dark slate ---
+    margin = int(size * 0.045)
+    circle_box = [margin, margin, size - margin, size - margin]
+
+    # Shadow layer
+    shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    sm = margin - int(size * 0.015)
+    sd.ellipse(
+        [sm + int(size * 0.015), sm + int(size * 0.025),
+         size - sm - int(size * 0.015), size - sm + int(size * 0.005)],
+        fill=(0, 0, 0, 90),
+    )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(size * 0.03))
+    img = Image.alpha_composite(img, shadow)
+    draw = ImageDraw.Draw(img)
+
+    # Main circle fill — dark navy
+    draw.ellipse(circle_box, fill=(22, 24, 38, 255))
+
+    # Subtle radial gradient overlay (lighter centre → darker edge)
+    gradient = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    for step in range(30, 0, -1):
+        frac = step / 30
+        r_px = int((size / 2 - margin) * frac)
+        cx, cy = size // 2, size // 2
+        alpha = int(28 * (1 - frac))
+        ImageDraw.Draw(gradient).ellipse(
+            [cx - r_px, cy - r_px, cx + r_px, cy + r_px],
+            fill=(80, 90, 160, alpha),
+        )
+    img = Image.alpha_composite(img, gradient)
+    draw = ImageDraw.Draw(img)
+
+    # Thin border ring — electric blue tint
+    draw.ellipse(circle_box, outline=(80, 110, 240, 80), width=max(2, size // 128))
+
+    # Inner highlight arc (top-left glass sheen)
+    sheen_box = [
+        int(size * 0.18), int(size * 0.14),
+        int(size * 0.82), int(size * 0.58),
+    ]
+    draw.arc(sheen_box, start=210, end=330, fill=(255, 255, 255, 30),
+             width=max(2, size // 80))
+
+    # ── Microphone glyph ──────────────────────────────────────────────────
+    cx, cy = size / 2, size / 2
+
+    # Mic body dimensions
+    body_w = size * 0.18
+    body_h = size * 0.30
+    body_rx = body_w * 0.5          # fully rounded ends
+    body_top = cy - size * 0.20
+    body_bot = cy + size * 0.10
+
+    # Mic body: white rounded rectangle
+    body_box = [cx - body_w / 2, body_top, cx + body_w / 2, body_bot]
+    draw.rounded_rectangle(body_box, radius=body_rx, fill=(255, 255, 255, 235))
+
+    # Thin highlight inside mic body (glass look)
+    hi_box = [cx - body_w * 0.28, body_top + size * 0.015,
+              cx - body_w * 0.08, body_bot - size * 0.04]
+    draw.rounded_rectangle(hi_box, radius=body_rx * 0.4,
+                            fill=(255, 255, 255, 70))
+
+    # Mic arc (open bottom U-shape)
+    arc_r = size * 0.20
+    arc_thick = max(3, size // 60)
+    arc_box = [cx - arc_r, cy - arc_r, cx + arc_r, cy + arc_r]
+    draw.arc(arc_box, start=0, end=180, fill=(255, 255, 255, 220),
+             width=arc_thick)
+
+    # Stand (vertical line below arc)
+    stand_x = cx
+    stand_top = cy + arc_r
+    stand_bot = cy + arc_r + size * 0.08
+    stand_w = max(3, size // 80)
+    draw.rectangle(
+        [stand_x - stand_w / 2, stand_top,
+         stand_x + stand_w / 2, stand_bot],
+        fill=(255, 255, 255, 210),
+    )
+
+    # Base (horizontal bar)
+    base_w = size * 0.22
+    base_h = max(3, size // 80)
+    base_y = stand_bot
+    draw.rounded_rectangle(
+        [cx - base_w / 2, base_y - base_h / 2,
+         cx + base_w / 2, base_y + base_h / 2],
+        radius=base_h / 2,
+        fill=(255, 255, 255, 210),
+    )
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+# ── Fallback: pure-stdlib minimal encoder (no Pillow) ─────────────────────
+
+def _create_fallback(size: int) -> bytes:
+    import struct, zlib
     cx, cy = size / 2, size / 2
     radius = size / 2 - 8
-    inner_radius = radius - 4
-
+    rows = []
     for y in range(size):
         row = []
         for x in range(size):
-            dx = x - cx
-            dy = y - cy
-            dist = (dx * dx + dy * dy) ** 0.5
-
-            if dist <= inner_radius:
-                # Inside circle: dark gray #383840
-                r, g, b, a = 56, 56, 64, 255
-                # Add subtle gradient
-                t = dist / inner_radius
-                r = int(56 + (72 - 56) * (1 - t))
-                g = int(56 + (72 - 56) * (1 - t))
-                b = int(64 + (80 - 64) * (1 - t))
-            elif dist <= radius:
-                # Border: lighter edge
-                r, g, b, a = 100, 100, 110, 200
+            dx, dy = x - cx, y - cy
+            d = (dx * dx + dy * dy) ** 0.5
+            if d <= radius - 4:
+                t = d / (radius - 4)
+                r = int(22 + 20 * (1 - t))
+                g = int(24 + 20 * (1 - t))
+                b = int(38 + 30 * (1 - t))
+                row.extend([r, g, b, 255])
+            elif d <= radius:
+                row.extend([80, 110, 240, 160])
             else:
-                # Outside: transparent
-                r, g, b, a = 0, 0, 0, 0
+                row.extend([0, 0, 0, 0])
+        rows.append(bytes(row))
 
-            row.extend([r, g, b, a])
-        pixels.append(bytes(row))
-
-    # Draw a simple mic shape (vertical bar + base) in white
-    # Mic body: vertical rounded rectangle in center
-    mic_w = size * 0.12
-    mic_h = size * 0.28
-    mic_cx = cx
-    mic_top = cy - mic_h * 0.6
-    mic_bot = cy + mic_h * 0.2
-    mic_base_y = cy + mic_h * 0.5
-    mic_stand_top = mic_bot + 4
-    mic_stand_bot = mic_base_y
-    mic_base_w = size * 0.16
-
-    pixels2 = []
-    for y in range(size):
-        row = list(pixels[y])
-        for x in range(size):
-            dx = x - cx
-            dy = y - cy
-            dist = (dx * dx + dy * dy) ** 0.5
-            if dist > inner_radius:
-                continue
-
-            idx = x * 4
-            px_r, px_g, px_b, px_a = row[idx], row[idx+1], row[idx+2], row[idx+3]
-
-            # Mic body (rounded rect)
-            if abs(x - mic_cx) <= mic_w / 2 and mic_top <= y <= mic_bot:
-                row[idx] = 240
-                row[idx+1] = 240
-                row[idx+2] = 245
-                row[idx+3] = 230
-            # Mic stand (thin vertical line)
-            elif abs(x - mic_cx) <= 3 and mic_stand_top <= y <= mic_stand_bot:
-                row[idx] = 240
-                row[idx+1] = 240
-                row[idx+2] = 245
-                row[idx+3] = 200
-            # Mic base (horizontal line)
-            elif abs(x - mic_cx) <= mic_base_w / 2 and abs(y - mic_base_y) <= 3:
-                row[idx] = 240
-                row[idx+1] = 240
-                row[idx+2] = 245
-                row[idx+3] = 200
-            # Mic arc (curved lines around body)
-            elif mic_top + mic_h * 0.15 <= y <= mic_bot + 6:
-                arc_r = mic_w * 0.85
-                arc_dist = abs(abs(x - mic_cx) - arc_r)
-                if arc_dist <= 2.5:
-                    row[idx] = 220
-                    row[idx+1] = 220
-                    row[idx+2] = 230
-                    row[idx+3] = 150
-
-        pixels2.append(bytes(row))
-
-    return _encode_png(size, size, pixels2)
-
-
-def _encode_png(width: int, height: int, rows: list[bytes]) -> bytes:
-    """Minimal PNG encoder for RGBA data."""
-    def chunk(chunk_type: bytes, data: bytes) -> bytes:
-        c = chunk_type + data
+    def chunk(ct, data):
+        c = ct + data
         return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
 
-    header = b"\x89PNG\r\n\x1a\n"
-    ihdr = chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
-
-    raw = b""
-    for row in rows:
-        raw += b"\x00" + row  # filter byte 0 (None) per row
-
-    idat = chunk(b"IDAT", zlib.compress(raw, 9))
-    iend = chunk(b"IEND", b"")
-
-    return header + ihdr + idat + iend
+    raw = b"".join(b"\x00" + r for r in rows)
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9))
+            + chunk(b"IEND", b""))
 
 
 if __name__ == "__main__":
