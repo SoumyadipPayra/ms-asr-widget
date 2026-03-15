@@ -1,0 +1,15 @@
+[gateway]
+url = "ws://localhost:8765"
+
+[audio]
+sample_rate = 16000
+chunk_duration_ms = 100
+# device = ""  # empty or omit for system default
+
+[hotkey]
+combination = "<cmd>+<shift>+<space>"
+mode = "toggle"  # "toggle" or "push_to_talk"
+
+[ui]
+size = 44
+opacity = 0.9
