@@ -222,6 +222,15 @@ class App:
 
 
 def main() -> None:
+    from asr_widget.ui.setup_wizard import needs_setup, run_setup_wizard
+
+    if needs_setup():
+        result = run_setup_wizard()
+        if result is None:
+            logger.info("Setup cancelled")
+            sys.exit(0)
+        logger.info("Setup complete — gateway: %s", result.get("gateway_url"))
+
     config = load_config()
     app = App(config)
     app.run()

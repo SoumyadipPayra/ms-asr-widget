@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,6 +70,17 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     candidates: list[Path] = []
     if path is not None:
         candidates.append(Path(path))
+
+    # Platform-specific config directory (written by setup wizard)
+    if platform.system() == "Windows":
+        _appdata = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        candidates.append(_appdata / "asr-widget" / "config.toml")
+    elif platform.system() == "Darwin":
+        candidates.append(Path.home() / "Library" / "Application Support" / "asr-widget" / "config.toml")
+    else:
+        _xdg = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        candidates.append(_xdg / "asr-widget" / "config.toml")
+
     candidates.append(Path.cwd() / "config.toml")
     candidates.append(Path(__file__).resolve().parent.parent.parent / "config.toml")
     candidates.append(Path.home() / ".config" / "asr-widget" / "config.toml")
